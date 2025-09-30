@@ -152,7 +152,6 @@ class WatermarkSettings:
         return obj
 
 
-
 # -------- image helpers --------
 
 SUPPORTED_READ = {fmt.data().decode("utf-8").lower() for fmt in QImageReader.supportedImageFormats()}
@@ -431,3 +430,276 @@ class PreviewCanvas(QWidget):
     def mouseReleaseEvent(self, e):
         self.dragging = False
 
+
+# -------- UI: Control panel --------
+
+class ControlPanel(QWidget):
+    settingsChanged = Signal(WatermarkSettings)
+    exportRequested = Signal()
+    addFilesRequested = Signal()
+    addFolderRequested = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.st = WatermarkSettings()
+        self.font_db = QFontDatabase()
+
+        root = QVBoxLayout(self)
+        root.setAlignment(Qt.AlignTop)
+
+        # Import group
+        grp_import = QGroupBox("文件处理")
+        ly_imp = QHBoxLayout()
+        btn_add_files = QPushButton("导入图片…")
+        btn_add_dir = QPushButton("导入文件夹…")
+        btn_add_files.clicked.connect(self.addFilesRequested.emit)
+        btn_add_dir.clicked.connect(self.addFolderRequested.emit)
+        ly_imp.addWidget(btn_add_files)
+        ly_imp.addWidget(btn_add_dir)
+        grp_import.setLayout(ly_imp)
+        root.addWidget(grp_import)
+
+        # Watermark type
+        grp_type = QGroupBox("水印类型")
+        ly_type = QHBoxLayout()
+        self.rb_text = QRadioButton("文本")
+        self.rb_img = QRadioButton("图片")
+        self.rb_text.setChecked(True)
+        self.rb_text.toggled.connect(self.on_type_changed)
+        ly_type.addWidget(self.rb_text)
+        ly_type.addWidget(self.rb_img)
+        grp_type.setLayout(ly_type)
+        root.addWidget(grp_type)
+
+        # Text settings
+        grp_text = QGroupBox("文本水印")
+        form_t = QFormLayout()
+        self.ed_text = QLineEdit(self.st.text)
+        self.cmb_font = QComboBox()
+        self.cmb_font.addItems(self.font_db.families())
+        # default select
+        idx = self.cmb_font.findText(self.st.font_family)
+        if idx >= 0: self.cmb_font.setCurrentIndex(idx)
+        self.spin_font = QSpinBox()
+        self.spin_font.setRange(6, 512)
+        self.spin_font.setValue(self.st.font_point)
+        self.chk_bold = QCheckBox("粗体")
+        self.chk_bold.setChecked(self.st.font_bold)
+        self.chk_italic = QCheckBox("斜体")
+        self.chk_italic.setChecked(self.st.font_italic)
+        self.btn_color = QPushButton("颜色…")
+        self.lbl_color = QLabel(self.st.color_rgba)
+        self.btn_color.clicked.connect(self.pick_color)
+        self.chk_shadow = QCheckBox("阴影")
+        self.chk_shadow.setChecked(self.st.shadow)
+        form_t.addRow("内容", self.ed_text)
+        row_font = QHBoxLayout()
+        row_font.addWidget(self.cmb_font)
+        row_font.addWidget(self.spin_font)
+        row_font.addWidget(self.chk_bold)
+        row_font.addWidget(self.chk_italic)
+        w_row_font = QWidget()
+        w_row_font.setLayout(row_font)
+        form_t.addRow("字体/字号", w_row_font)
+        row_col = QHBoxLayout()
+        row_col.addWidget(self.btn_color)
+        row_col.addWidget(self.lbl_color)
+        w_row_col = QWidget()
+        w_row_col.setLayout(row_col)
+        form_t.addRow("颜色", w_row_col)
+        form_t.addRow(self.chk_shadow)
+        grp_text.setLayout(form_t)
+        root.addWidget(grp_text)
+
+        # Image watermark
+        grp_img = QGroupBox("图片水印")
+        form_i = QFormLayout()
+        self.ed_img = QLineEdit(self.st.image_path)
+        self.btn_img = QPushButton("选择图片…")
+        self.btn_img.clicked.connect(self.pick_image)
+        row_img = QHBoxLayout()
+        row_img.addWidget(self.ed_img)
+        row_img.addWidget(self.btn_img)
+        w_row_img = QWidget()
+        w_row_img.setLayout(row_img)
+        self.sld_img_scale = QSlider(Qt.Horizontal)
+        self.sld_img_scale.setRange(5, 300)
+        self.sld_img_scale.setValue(self.st.image_scale_pct)
+        form_i.addRow("文件", w_row_img)
+        form_i.addRow("缩放(%)", self.sld_img_scale)
+        grp_img.setLayout(form_i)
+        root.addWidget(grp_img)
+
+        # Common style
+        grp_style = QGroupBox("样式")
+        form_s = QFormLayout()
+        self.sld_opacity = QSlider(Qt.Horizontal)
+        self.sld_opacity.setRange(0, 100)
+        self.sld_opacity.setValue(self.st.opacity)
+        self.spin_rotation = QSpinBox()
+        self.spin_rotation.setRange(-180, 180)
+        self.spin_rotation.setValue(int(self.st.rotation))
+        form_s.addRow("透明度(%)", self.sld_opacity)
+        form_s.addRow("旋转(°)", self.spin_rotation)
+        grp_style.setLayout(form_s)
+        root.addWidget(grp_style)
+
+        # Position
+        grp_pos = QGroupBox("位置")
+        grid = QGridLayout()
+        self.pos_buttons: List[QPushButton] = []
+        positions = [
+            ("↖", 0.0, 0.0), ("↑", 0.5, 0.0), ("↗", 1.0, 0.0),
+            ("←", 0.0, 0.5), ("●", 0.5, 0.5), ("→", 1.0, 0.5),
+            ("↙", 0.0, 1.0), ("↓", 0.5, 1.0), ("↘", 1.0, 1.0),
+        ]
+        for i, (txt, x, y) in enumerate(positions):
+            btn = QPushButton(txt)
+            btn.clicked.connect(lambda _, xx=x, yy=y: self.set_nine_grid(xx, yy))
+            self.pos_buttons.append(btn)
+            grid.addWidget(btn, i // 3, i % 3)
+        grp_pos.setLayout(grid)
+        root.addWidget(grp_pos)
+
+        # Export
+        grp_exp = QGroupBox("导出")
+        form_e = QFormLayout()
+        self.ed_out = QLineEdit(self.st.out_dir)
+        self.btn_out = QPushButton("选择输出目录…")
+        self.btn_out.clicked.connect(self.pick_out_dir)
+        row_out = QHBoxLayout()
+        row_out.addWidget(self.ed_out)
+        row_out.addWidget(self.btn_out)
+        w_row_out = QWidget()
+        w_row_out.setLayout(row_out)
+        self.cmb_fmt = QComboBox()
+        self.cmb_fmt.addItems(["PNG", "JPEG"])
+        self.cmb_fmt.setCurrentText(self.st.out_format)
+        self.sld_quality = QSlider(Qt.Horizontal)
+        self.sld_quality.setRange(0, 100)
+        self.sld_quality.setValue(self.st.jpeg_quality)
+        self.lbl_quality = QLabel(f"{self.st.jpeg_quality}")
+        row_q = QHBoxLayout()
+        row_q.addWidget(self.sld_quality)
+        row_q.addWidget(self.lbl_quality)
+        w_row_q = QWidget()
+        w_row_q.setLayout(row_q)
+
+        # resize
+        self.cmb_resize = QComboBox()
+        self.cmb_resize.addItems(["不缩放", "按宽", "按高", "按百分比"])
+        self.cmb_resize.setCurrentIndex(0)
+        self.ed_resize = QLineEdit()
+        self.ed_resize.setPlaceholderText("像素或百分比")
+        self.ed_resize.setValidator(QIntValidator(0, 10000))
+        row_r = QHBoxLayout()
+        row_r.addWidget(self.cmb_resize)
+        row_r.addWidget(self.ed_resize)
+        w_row_r = QWidget()
+        w_row_r.setLayout(row_r)
+
+        # naming
+        self.cmb_name = QComboBox()
+        self.cmb_name.addItems(["保留原名", "前缀", "后缀"])
+        self.ed_prefix = QLineEdit(self.st.name_prefix)
+        self.ed_suffix = QLineEdit(self.st.name_suffix)
+        row_n = QHBoxLayout()
+        row_n.addWidget(self.cmb_name)
+        row_n.addWidget(QLabel("前缀:"))
+        row_n.addWidget(self.ed_prefix)
+        row_n.addWidget(QLabel("后缀:"))
+        row_n.addWidget(self.ed_suffix)
+        w_row_n = QWidget()
+        w_row_n.setLayout(row_n)
+
+        self.btn_export = QPushButton("开始导出")
+        self.btn_export.clicked.connect(self.exportRequested.emit)
+
+        form_e.addRow("输出目录", w_row_out)
+        form_e.addRow("格式", self.cmb_fmt)
+        form_e.addRow("JPEG质量", w_row_q)
+        form_e.addRow("尺寸调整", w_row_r)
+        form_e.addRow("命名规则", w_row_n)
+        form_e.addRow(self.btn_export)
+        grp_exp.setLayout(form_e)
+        root.addWidget(grp_exp)
+
+        # Templates
+        grp_tpl = QGroupBox("水印模板")
+        ly_tpl = QHBoxLayout()
+        self.cmb_tpl = QComboBox()
+        self.btn_tpl_save = QPushButton("保存…")
+        self.btn_tpl_del = QPushButton("删除")
+        self.btn_tpl_save.clicked.connect(self.save_template)
+        self.btn_tpl_del.clicked.connect(self.delete_template)
+        ly_tpl.addWidget(self.cmb_tpl)
+        ly_tpl.addWidget(self.btn_tpl_save)
+        ly_tpl.addWidget(self.btn_tpl_del)
+        grp_tpl.setLayout(ly_tpl)
+        root.addWidget(grp_tpl)
+
+        root.addStretch(1)
+
+        # signal wiring
+        for w in [
+            self.ed_text, self.cmb_font, self.spin_font,
+            self.chk_bold, self.chk_italic, self.chk_shadow,
+            self.sld_opacity, self.spin_rotation, self.ed_img,
+            self.sld_img_scale, self.cmb_fmt, self.sld_quality,
+            self.cmb_resize, self.ed_resize, self.rb_text, self.rb_img,
+            self.ed_out, self.cmb_name, self.ed_prefix, self.ed_suffix
+        ]:
+            if isinstance(w, (QLineEdit,)):
+                w.textChanged.connect(self.emit_settings)
+            elif isinstance(w, (QComboBox,)):
+                w.currentIndexChanged.connect(self.emit_settings)
+            elif isinstance(w, (QCheckBox, QRadioButton)):
+                w.toggled.connect(self.emit_settings)
+            elif isinstance(w, (QSpinBox,)):
+                w.valueChanged.connect(self.emit_settings)
+            elif isinstance(w, (QSlider,)):
+                w.valueChanged.connect(self.emit_settings)
+
+        self.sld_quality.valueChanged.connect(lambda v: self.lbl_quality.setText(str(v)))
+        self.cmb_fmt.currentTextChanged.connect(self.toggle_quality_enabled)
+        self.toggle_quality_enabled(self.cmb_fmt.currentText())
+
+        self.reload_templates_combo()
+        # try load last settings
+        self.try_load_last()
+
+    def on_type_changed(self, checked: bool):
+        self.emit_settings()
+
+    def toggle_quality_enabled(self, fmt: str):
+        enabled = (fmt.upper() == "JPEG")
+        self.sld_quality.setEnabled(enabled)
+        self.lbl_quality.setEnabled(enabled)
+
+    def pick_color(self):
+        c0 = qcolor_from_rgba_str(self.st.color_rgba)
+        c = QColorDialog.getColor(c0, self, "选择颜色", QColorDialog.ShowAlphaChannel)
+        if c.isValid():
+            self.st.color_rgba = c.name(QColor.HexArgb)
+            self.lbl_color.setText(self.st.color_rgba)
+            self.emit_settings()
+
+    def pick_image(self):
+        fn, _ = QFileDialog.getOpenFileName(self, "选择水印图片", "", "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+        if fn:
+            self.ed_img.setText(fn)
+
+    def pick_out_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "选择输出目录")
+        if d:
+            self.ed_out.setText(d)
+
+    def set_nine_grid(self, x: float, y: float):
+        # apply margin
+        m = self.st.margin_rel
+        rx = (x * (1 - 2 * m)) + m
+        ry = (y * (1 - 2 * m)) + m
+        rx = min(1.0, max(0.0, rx))
+        ry = min(1.0, max(0.0, ry))
+        self.st.pos_rel = (rx, ry)
+        self.emit_settings()
