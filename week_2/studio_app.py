@@ -922,3 +922,117 @@ class MainWindow(QMainWindow):
             imgs = enumerate_images([Path(d)])
             self.images.add_images(imgs)
             self.ensure_preview_loaded()
+
+    # --- export pipeline ---
+
+    def build_watermark_layer(self, base_size: QSize, st: WatermarkSettings) -> Optional[QPixmap]:
+        canvas = PreviewCanvas()  # reuse logic why: single source of truth for wm rendering
+        canvas.settings = st
+        # Build wm pixmap for full-size base (not scaled preview)
+        wm = canvas.build_watermark_pixmap(base_size)
+        return wm
+
+    def compose_image(self, src_img: QImage, st: WatermarkSettings) -> QImage:
+        base = src_img
+        # optional resize
+        if st.resize_mode != "none" and st.resize_value > 0:
+            w, h = base.width(), base.height()
+            if st.resize_mode == "width" and st.resize_value < w:
+                new_w = st.resize_value
+                new_h = int(h * (new_w / w))
+                base = base.scaled(new_w, new_h, Qt.IgnoreAspectRatio if new_h == 0 else Qt.KeepAspectRatio,
+                                   Qt.SmoothTransformation)
+            elif st.resize_mode == "height" and st.resize_value < h:
+                new_h = st.resize_value
+                new_w = int(w * (new_h / h))
+                base = base.scaled(new_w, new_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            elif st.resize_mode == "percent":
+                scale = max(1, st.resize_value) / 100.0
+                base = base.scaled(int(w * scale), int(h * scale), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        # watermark
+        wm = self.build_watermark_layer(base.size(), st)
+        if wm is None:
+            return base
+
+        # compute draw position
+        painter = QPainter()
+        out = QImage(base.size(), QImage.Format.Format_ARGB32)
+        out.fill(Qt.transparent)
+        painter.begin(out)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        painter.drawImage(0, 0, base)
+        cx = st.pos_rel[0] * base.width()
+        cy = st.pos_rel[1] * base.height()
+        x = int(cx - wm.width() / 2)
+        y = int(cy - wm.height() / 2)
+        painter.setOpacity(max(0.0, min(1.0, st.opacity / 100.0)))
+        painter.drawPixmap(x, y, wm)
+        painter.end()
+        return out
+
+    def compute_out_name(self, src: Path, st: WatermarkSettings, fmt: str) -> str:
+        stem = src.stem
+        if st.name_mode == "prefix":
+            stem = f"{st.name_prefix}{stem}"
+        elif st.name_mode == "suffix":
+            stem = f"{stem}{st.name_suffix}"
+        ext = ".png" if fmt.upper() == "PNG" else ".jpg"
+        return stem + ext
+
+    def on_export(self):
+        st = self.preview.settings
+        # validations
+        if len(self.images.paths) == 0:
+            QMessageBox.warning(self, "提示", "请先导入图片。")
+            return
+        if not st.out_dir:
+            QMessageBox.warning(self, "提示", "请选择输出目录。")
+            return
+        out_dir = Path(st.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # forbid exporting to source directories by default
+        src_dirs = {p.parent.resolve() for p in self.images.paths}
+        if out_dir.resolve() in src_dirs:
+            QMessageBox.warning(self, "提示", "为防覆盖，禁止导出到原图所在目录，请选择其他目录。")
+            return
+
+        if st.wm_type == "text" and not st.text.strip():
+            QMessageBox.warning(self, "提示", "文本水印内容不能为空。")
+            return
+        if st.wm_type == "image" and not Path(st.image_path).exists():
+            QMessageBox.warning(self, "提示", "请选择有效的图片水印文件。")
+            return
+
+        fmt = st.out_format.upper()
+        errors = []
+        progress = QProgressDialog("正在导出…", "取消", 0, len(self.images.paths), self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        for i, src in enumerate(self.images.paths):
+            progress.setValue(i)
+            progress.setLabelText(f"处理：{src.name}")
+            QApplication.processEvents()
+            if progress.wasCanceled():
+                break
+            try:
+                img = load_qimage(src)
+                if img is None:
+                    raise RuntimeError("无法读取图片")
+                out_img = self.compose_image(img, st)
+                out_name = self.compute_out_name(src, st, fmt)
+                dest = out_dir / out_name
+                if not save_qimage(out_img, dest, fmt, st.jpeg_quality):
+                    raise RuntimeError("保存失败")
+            except Exception as e:
+                errors.append(f"{src.name}: {e}")
+        progress.setValue(len(self.images.paths))
+
+        if errors:
+            QMessageBox.warning(self, "完成但有错误",
+                                "以下文件失败：\n" + "\n".join(errors[:20]) + ("\n..." if len(errors) > 20 else ""))
+        else:
+            QMessageBox.information(self, "完成", f"已导出到：\n{out_dir}")
+
