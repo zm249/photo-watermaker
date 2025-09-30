@@ -703,3 +703,113 @@ class ControlPanel(QWidget):
         ry = min(1.0, max(0.0, ry))
         self.st.pos_rel = (rx, ry)
         self.emit_settings()
+
+
+    def emit_settings(self):
+        # gather UI -> settings
+        st = self.st
+        st.wm_type = "text" if self.rb_text.isChecked() else "image"
+        st.text = self.ed_text.text()
+        st.font_family = self.cmb_font.currentText()
+        st.font_point = self.spin_font.value()
+        st.font_bold = self.chk_bold.isChecked()
+        st.font_italic = self.chk_italic.isChecked()
+        st.shadow = self.chk_shadow.isChecked()
+        st.opacity = self.sld_opacity.value()
+        st.rotation = float(self.spin_rotation.value())
+        st.image_path = self.ed_img.text()
+        st.image_scale_pct = self.sld_img_scale.value()
+        st.out_dir = self.ed_out.text()
+        st.out_format = self.cmb_fmt.currentText()
+        st.jpeg_quality = self.sld_quality.value()
+        idx_resize = self.cmb_resize.currentIndex()
+        st.resize_mode = ["none", "width", "height", "percent"][idx_resize]
+        st.resize_value = int(self.ed_resize.text() or "0")
+        nm_idx = self.cmb_name.currentIndex()
+        st.name_mode = ["original", "prefix", "suffix"][nm_idx]
+        st.name_prefix = self.ed_prefix.text()
+        st.name_suffix = self.ed_suffix.text()
+        self.settingsChanged.emit(st)
+
+    # templates
+    def reload_templates_combo(self):
+        self.cmb_tpl.clear()
+        tdir = templates_dir()
+        names = [p.stem for p in tdir.glob("*.json")]
+        self.cmb_tpl.addItems(sorted(names))
+        if self.cmb_tpl.count() > 0:
+            self.cmb_tpl.setCurrentIndex(0)
+            self.cmb_tpl.currentTextChanged.connect(self.load_template)
+
+    def save_template(self):
+        name, ok = QFileDialog.getSaveFileName(self, "保存模板为…", str(templates_dir() / "template.json"),
+                                               "JSON (*.json)")
+        if not name:
+            return
+        self.emit_settings()
+        try:
+            with open(name, "w", encoding="utf-8") as f:
+                json.dump(self.st.to_dict(), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存失败：\n{e}")
+            return
+        self.reload_templates_combo()
+
+    def load_template(self, stem: str):
+        p = templates_dir() / f"{stem}.json"
+        if not p.exists():
+            return
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            self.st = WatermarkSettings.from_dict(d)
+            self.sync_ui_from_settings()
+            self.settingsChanged.emit(self.st)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"加载失败：\n{e}")
+
+    def delete_template(self):
+        stem = self.cmb_tpl.currentText()
+        if not stem:
+            return
+        p = templates_dir() / f"{stem}.json"
+        if p.exists():
+            p.unlink()
+        self.reload_templates_combo()
+
+    def sync_ui_from_settings(self):
+        st = self.st
+        self.rb_text.setChecked(st.wm_type == "text")
+        self.rb_img.setChecked(st.wm_type == "image")
+        self.ed_text.setText(st.text)
+        i = self.cmb_font.findText(st.font_family)
+        if i >= 0: self.cmb_font.setCurrentIndex(i)
+        self.spin_font.setValue(st.font_point)
+        self.chk_bold.setChecked(st.font_bold)
+        self.chk_italic.setChecked(st.font_italic)
+        self.lbl_color.setText(st.color_rgba)
+        self.chk_shadow.setChecked(st.shadow)
+        self.sld_opacity.setValue(st.opacity)
+        self.spin_rotation.setValue(int(st.rotation))
+        self.ed_img.setText(st.image_path)
+        self.sld_img_scale.setValue(st.image_scale_pct)
+        self.ed_out.setText(st.out_dir)
+        self.cmb_fmt.setCurrentText(st.out_format)
+        self.sld_quality.setValue(st.jpeg_quality)
+        self.cmb_resize.setCurrentIndex(["none", "width", "height", "percent"].index(st.resize_mode))
+        self.ed_resize.setText(str(st.resize_value or ""))
+        self.cmb_name.setCurrentIndex(["original", "prefix", "suffix"].index(st.name_mode))
+        self.ed_prefix.setText(st.name_prefix)
+        self.ed_suffix.setText(st.name_suffix)
+        self.toggle_quality_enabled(st.out_format)
+        # note: pos_rel stays in preview
+
+    def try_load_last(self):
+        p = last_settings_path()
+        if p.exists():
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                self.st = WatermarkSettings.from_dict(d)
+                self.sync_ui_from_settings()
+                self.settingsChanged.emit(self.st)
+            except Exception:
+                pass
