@@ -12,3 +12,11 @@
 - 用户可以设置字体大小、颜色和在图片上的位置（例如，左上角、居中、右下角）。
 
 - 程序将文本水印绘制到图片上，并保存为新的图片文件，保存在原目录名_watermark的新目录下，这个目录作为原目录的子目录
+
+## 第二次作业
+
+打包命令
+
+```angular2html
+pyinstaller --noconsole --onefile --icon=assets/logo.ico watermark_app.py
+```
