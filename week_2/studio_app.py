@@ -200,3 +200,61 @@ def qcolor_from_rgba_str(s: str) -> QColor:
     if not c.isValid():
         return QColor(255, 255, 255, 180)
     return c
+
+
+# -------- UI: Image list --------
+
+class ImageListPanel(QListWidget):
+    filesChanged = Signal(list)
+
+    def __init__(self):
+        super().__init__()
+        self.setIconSize(THUMB_SIZE)
+        self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.DragDropMode.NoDragDrop)
+        self.paths: List[Path] = []
+
+    def add_images(self, new_paths: List[Path]):
+        existed = {str(p) for p in self.paths}
+        added = []
+        for p in new_paths:
+            sp = str(p)
+            if sp in existed:
+                continue
+            img = load_qimage(p)
+            if img is None:
+                continue
+            thumb = QPixmap.fromImage(img.scaled(THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            item = QListWidgetItem(QIcon(thumb), p.name)
+            item.setToolTip(sp)
+            self.addItem(item)
+            self.paths.append(p)
+            added.append(p)
+        if added:
+            self.filesChanged.emit([str(p) for p in self.paths])
+
+    def remove_selected(self):
+        rows = sorted({i.row() for i in self.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self.takeItem(r)
+            del self.paths[r]
+        self.filesChanged.emit([str(p) for p in self.paths])
+
+    def clear_all(self):
+        super().clear()
+        self.paths = []
+        self.filesChanged.emit([])
+
+    # drag & drop
+    def dragEnterEvent(self, e: QDragEnterEvent):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e: QDropEvent):
+        urls = e.mimeData().urls()
+        paths = [Path(u.toLocalFile()) for u in urls]
+        imgs = enumerate_images(paths)
+        self.add_images(imgs)
+
+
