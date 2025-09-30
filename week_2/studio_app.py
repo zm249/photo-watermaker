@@ -997,6 +997,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "为防覆盖，禁止导出到原图所在目录，请选择其他目录。")
             return
 
+        # watermark validity
         if st.wm_type == "text" and not st.text.strip():
             QMessageBox.warning(self, "提示", "文本水印内容不能为空。")
             return
