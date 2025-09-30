@@ -704,7 +704,6 @@ class ControlPanel(QWidget):
         self.st.pos_rel = (rx, ry)
         self.emit_settings()
 
-
     def emit_settings(self):
         # gather UI -> settings
         st = self.st
@@ -1036,3 +1035,15 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "完成", f"已导出到：\n{out_dir}")
 
+
+# -------- entry --------
+
+def main():
+    app = QApplication(sys.argv)
+    win = MainWindow()
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
