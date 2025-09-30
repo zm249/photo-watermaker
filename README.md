@@ -20,3 +20,9 @@
 ```angular2html
 pyinstaller --noconsole --onefile --icon=assets/logo.ico watermark_app.py
 ```
+
+可执行文件的保存位置
+
+```angular2html
+week_2/app.exe
+```
