@@ -258,3 +258,176 @@ class ImageListPanel(QListWidget):
         self.add_images(imgs)
 
 
+# -------- UI: Preview Canvas --------
+
+class PreviewCanvas(QWidget):
+    positionChanged = Signal(tuple)  # (x_rel, y_rel)
+
+    def __init__(self):
+        super().__init__()
+        self.base_img: Optional[QImage] = None
+        self.base_pix: Optional[QPixmap] = None
+        self.scaled_rect: QRect = QRect()
+        self.settings = WatermarkSettings()
+        self.setMouseTracking(True)
+        self.dragging = False
+        self.drag_offset = QPointF(0, 0)  # why: to preserve pointer grab relative to wm center
+        self.cached_wm_pixmap: Optional[QPixmap] = None
+        self.setMinimumSize(320, 240)
+
+    def set_image(self, img: Optional[QImage]):
+        self.base_img = img
+        self.base_pix = QPixmap.fromImage(img) if img is not None else None
+        self.update()
+
+    def set_settings(self, st: WatermarkSettings):
+        self.settings = st
+        self.cached_wm_pixmap = None
+        self.update()
+
+    def sizeHint(self) -> QSize:
+        return QSize(800, 600)
+
+    def compute_scaled_rect(self) -> QRect:
+        if not self.base_pix:
+            return QRect()
+        avail = self.rect()
+        pix = self.base_pix
+        scaled = pix.scaled(avail.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        x = (avail.width() - scaled.width()) // 2
+        y = (avail.height() - scaled.height()) // 2
+        return QRect(QPoint(x, y), scaled.size())
+
+    def build_text_watermark(self, target_px: int) -> QPixmap:
+        st = self.settings
+        font = QFont(st.font_family, st.font_point)
+        font.setBold(st.font_bold)
+        font.setItalic(st.font_italic)
+        # measure text
+        tmp_img = QImage(1, 1, QImage.Format.Format_ARGB32)
+        tmp_img.fill(Qt.transparent)
+        p = QPainter(tmp_img)
+        p.setFont(font)
+        metrics = p.fontMetrics()
+        br = metrics.boundingRect(st.text)
+        p.end()
+        w = max(4, br.width() + 16)
+        h = max(4, br.height() + 16)
+        # draw text with optional shadow
+        img = QImage(w, h, QImage.Format.Format_ARGB32)
+        img.fill(Qt.transparent)
+        painter = QPainter(img)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setFont(font)
+        col = qcolor_from_rgba_str(st.color_rgba)
+        if st.shadow:
+            shadow = QColor(0, 0, 0, int(0.5 * st.opacity * 2.55))
+            painter.setPen(shadow)
+            painter.drawText(9, h - metrics.descent() - 7, st.text)
+        painter.setPen(col)
+        painter.drawText(8, h - metrics.descent() - 8, st.text)
+        painter.end()
+        pix = QPixmap.fromImage(img)
+        # scale text if needed relative to target pixels (no-op here font point governs size)
+        return pix
+
+    def build_image_watermark(self, base_size: QSize) -> Optional[QPixmap]:
+        st = self.settings
+        if not st.image_path or not Path(st.image_path).exists():
+            return None
+        wm_img = load_qimage(Path(st.image_path))
+        if wm_img is None or wm_img.isNull():
+            return None
+        # scale relative to shorter side of base image
+        short_side = min(base_size.width(), base_size.height())
+        scale_px = max(1, int(short_side * (st.image_scale_pct / 100.0)))
+        wm_pix = QPixmap.fromImage(wm_img)
+        ratio = wm_pix.width() / wm_pix.height()
+        if wm_pix.width() >= wm_pix.height():
+            target_w = scale_px
+            target_h = int(target_w / ratio)
+        else:
+            target_h = scale_px
+            target_w = int(target_h * ratio)
+        scaled = wm_pix.scaled(QSize(target_w, target_h), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        return scaled
+
+    def build_watermark_pixmap(self, base_px_size: QSize) -> Optional[QPixmap]:
+        if self.cached_wm_pixmap:
+            return self.cached_wm_pixmap
+        st = self.settings
+        if st.wm_type == "text":
+            pix = self.build_text_watermark(target_px=min(base_px_size.width(), base_px_size.height()))
+        else:
+            pix = self.build_image_watermark(base_px_size)
+            if pix is None:
+                return None
+        # rotation
+        if abs(st.rotation) > 0.01:
+            tr = QTransform()
+            tr.rotate(st.rotation)
+            pix = pix.transformed(tr, Qt.SmoothTransformation)
+        self.cached_wm_pixmap = pix
+        return pix
+
+    def wm_rect_on_scaled(self) -> Optional[QRect]:
+        if not self.base_pix:
+            return None
+        scaled_rect = self.compute_scaled_rect()
+        wm_pix = self.build_watermark_pixmap(scaled_rect.size())
+        if wm_pix is None:
+            return None
+        st = self.settings
+        cx = scaled_rect.x() + st.pos_rel[0] * scaled_rect.width()
+        cy = scaled_rect.y() + st.pos_rel[1] * scaled_rect.height()
+        x = int(cx - wm_pix.width() / 2)
+        y = int(cy - wm_pix.height() / 2)
+        return QRect(x, y, wm_pix.width(), wm_pix.height())
+
+    def paintEvent(self, e: QPaintEvent):
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.palette().base())
+        if not self.base_pix:
+            painter.drawText(self.rect(), Qt.AlignCenter, "导入图片以预览")
+            painter.end()
+            return
+        # draw scaled base
+        self.scaled_rect = self.compute_scaled_rect()
+        scaled_pix = self.base_pix.scaled(self.scaled_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap(self.scaled_rect.topLeft(), scaled_pix)
+        # draw watermark
+        wm_pix = self.build_watermark_pixmap(self.scaled_rect.size())
+        if wm_pix:
+            st = self.settings
+            rect = self.wm_rect_on_scaled()
+            if rect:
+                painter.setOpacity(max(0.0, min(1.0, st.opacity / 100.0)))
+                painter.drawPixmap(rect.topLeft(), wm_pix)
+        painter.end()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            rect = self.wm_rect_on_scaled()
+            if rect and rect.contains(e.pos()):
+                self.dragging = True
+                c = rect.center()
+                self.drag_offset = QPointF(e.position().x() - c.x(), e.position().y() - c.y())
+
+    def mouseMoveEvent(self, e):
+        if self.dragging and self.base_pix:
+            sr = self.compute_scaled_rect()
+            cx = e.position().x() - self.drag_offset.x()
+            cy = e.position().y() - self.drag_offset.y()
+            # clamp to scaled rect
+            cx = max(sr.left(), min(sr.right(), cx))
+            cy = max(sr.top(), min(sr.bottom(), cy))
+            x_rel = (cx - sr.left()) / max(1, sr.width())
+            y_rel = (cy - sr.top()) / max(1, sr.height())
+            self.settings.pos_rel = (float(x_rel), float(y_rel))
+            self.cached_wm_pixmap = None
+            self.update()
+            self.positionChanged.emit(self.settings.pos_rel)
+
+    def mouseReleaseEvent(self, e):
+        self.dragging = False
+
