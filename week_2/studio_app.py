@@ -813,3 +813,112 @@ class ControlPanel(QWidget):
                 self.settingsChanged.emit(self.st)
             except Exception:
                 pass
+
+
+# -------- Main Window --------
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("水印工具 - Code Copilot")
+        self.resize(1280, 800)
+        self.setAcceptDrops(True)
+
+        self.images = ImageListPanel()
+        self.preview = PreviewCanvas()
+        self.controls = ControlPanel()
+
+        self.controls.settingsChanged.connect(self.on_settings_changed)
+        self.controls.exportRequested.connect(self.on_export)
+        self.controls.addFilesRequested.connect(self.on_add_files)
+        self.controls.addFolderRequested.connect(self.on_add_folder)
+        self.preview.positionChanged.connect(self.on_preview_pos_changed)
+        self.images.itemSelectionChanged.connect(self.on_selection_changed)
+
+        # Layout
+        splitter = QSplitter()
+        splitter.addWidget(self.images)
+        # Right composite: preview + controls (scroll)
+        right = QSplitter(Qt.Vertical)
+        right.addWidget(self.preview)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.controls)
+        right.addWidget(scroll)
+        right.setStretchFactor(0, 3)
+        right.setStretchFactor(1, 2)
+
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+
+        self.setCentralWidget(splitter)
+
+        # toolbar
+        tb = QToolBar("主工具栏")
+        self.addToolBar(tb)
+        act_add = QAction("导入图片", self)
+        act_add.triggered.connect(self.on_add_files)
+        act_add_dir = QAction("导入文件夹", self)
+        act_add_dir.triggered.connect(self.on_add_folder)
+        act_rm = QAction("移除所选", self)
+        act_rm.triggered.connect(self.images.remove_selected)
+        act_clear = QAction("清空列表", self)
+        act_clear.triggered.connect(self.images.clear_all)
+        tb.addActions([act_add, act_add_dir, act_rm, act_clear])
+
+        self.setStatusBar(QStatusBar(self))
+
+        # load last selected preview
+        self.images.filesChanged.connect(self.ensure_preview_loaded)
+
+    def dragEnterEvent(self, e: QDragEnterEvent):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dropEvent(self, e: QDropEvent):
+        urls = e.mimeData().urls()
+        paths = [Path(u.toLocalFile()) for u in urls]
+        imgs = enumerate_images(paths)
+        self.images.add_images(imgs)
+        self.ensure_preview_loaded()
+
+    def ensure_preview_loaded(self):
+        # pick first if none selected
+        if self.images.count() > 0 and len(self.images.selectedItems()) == 0:
+            self.images.setCurrentRow(0)
+            self.on_selection_changed()
+
+    def on_selection_changed(self):
+        row = self.images.currentRow()
+        if row < 0 or row >= len(self.images.paths):
+            self.preview.set_image(None)
+            return
+        img = load_qimage(self.images.paths[row])
+        self.preview.set_image(img)
+
+    def on_settings_changed(self, st: WatermarkSettings):
+        self.preview.set_settings(st)
+        # persist last
+        try:
+            last_settings_path().write_text(json.dumps(st.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def on_preview_pos_changed(self, rel: tuple):
+        # nothing to do settings already updated by canvas
+        pass
+
+    def on_add_files(self):
+        fns, _ = QFileDialog.getOpenFileNames(self, "导入图片", "", "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+        if fns:
+            self.images.add_images([Path(f) for f in fns])
+            self.ensure_preview_loaded()
+
+    def on_add_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "导入文件夹")
+        if d:
+            imgs = enumerate_images([Path(d)])
+            self.images.add_images(imgs)
+            self.ensure_preview_loaded()
