@@ -100,3 +100,53 @@ def templates_dir() -> Path:
 def last_settings_path() -> Path:
     return app_data_dir() / "last.json"
 
+
+# -------- data model --------
+
+@dataclass
+class WatermarkSettings:
+    # general
+    wm_type: str = "text"  # "text" | "image"
+    opacity: int = 70  # 0-100
+    rotation: float = 0.0  # degrees
+    pos_rel: Tuple[float, float] = (0.5, 0.5)  # center anchor, 0..1
+    margin_rel: float = 0.03  # for nine-grid presets
+
+    # text wm
+    text: str = "Sample Watermark"
+    font_family: str = "Arial"
+    font_point: int = 36
+    font_bold: bool = False
+    font_italic: bool = False
+    color_rgba: str = "#FFFFFFB3"  # white ~70%
+    shadow: bool = True  # soft shadow for readability
+
+    # image wm
+    image_path: str = ""
+    image_scale_pct: int = 30  # relative to shorter side of base image
+
+    # export
+    out_dir: str = ""
+    out_format: str = "PNG"  # "PNG" | "JPEG"
+    jpeg_quality: int = 90  # 0-100
+
+    # resize
+    resize_mode: str = "none"  # "none" | "width" | "height" | "percent"
+    resize_value: int = 0
+
+    # naming
+    name_mode: str = "original"  # "original" | "prefix" | "suffix"
+    name_prefix: str = "wm_"
+    name_suffix: str = "_watermarked"
+
+    def to_dict(self) -> Dict:
+        d = asdict(self)
+        return d
+
+    @staticmethod
+    def from_dict(d: Dict) -> "WatermarkSettings":
+        obj = WatermarkSettings()
+        for k, v in d.items():
+            if hasattr(obj, k):
+                setattr(obj, k, v)
+        return obj
