@@ -150,3 +150,53 @@ class WatermarkSettings:
             if hasattr(obj, k):
                 setattr(obj, k, v)
         return obj
+
+
+
+# -------- image helpers --------
+
+SUPPORTED_READ = {fmt.data().decode("utf-8").lower() for fmt in QImageReader.supportedImageFormats()}
+VALID_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"} & {f".{e}" for e in SUPPORTED_READ}
+THUMB_SIZE = QSize(120, 120)
+
+
+def is_image_file(p: Path) -> bool:
+    return p.is_file() and p.suffix.lower() in VALID_EXTS
+
+
+def enumerate_images(paths: List[Path]) -> List[Path]:
+    out: List[Path] = []
+    for path in paths:
+        if path.is_file():
+            if is_image_file(path):
+                out.append(path)
+        elif path.is_dir():
+            for root, _, files in os.walk(path):
+                for fn in files:
+                    fp = Path(root) / fn
+                    if is_image_file(fp):
+                        out.append(fp)
+    return out
+
+
+def load_qimage(path: Path) -> Optional[QImage]:
+    reader = QImageReader(str(path))
+    img = reader.read()
+    if img.isNull():
+        return None
+    return img.convertToFormat(QImage.Format.Format_ARGB32)
+
+
+def save_qimage(img: QImage, dest: Path, fmt: str, jpeg_quality: int) -> bool:
+    writer = QImageWriter(str(dest), fmt.encode("utf-8"))
+    if fmt.upper() == "JPEG":
+        writer.setQuality(jpeg_quality)
+    return writer.write(img)
+
+
+def qcolor_from_rgba_str(s: str) -> QColor:
+    # Accept #RRGGBB or #RRGGBBAA
+    c = QColor(s)
+    if not c.isValid():
+        return QColor(255, 255, 255, 180)
+    return c
